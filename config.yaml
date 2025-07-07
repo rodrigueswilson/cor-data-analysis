@@ -23,6 +23,24 @@ features:
   enable_jpg_processing: true
   enable_chart_generation: true
 
+# Collector Settings
+collectors:
+  # MP3 Collector Settings
+  mp3:
+    batch_size: 100
+    enable_outlier_detection: true
+    outlier_dirs: ["outliers"]
+    time_format_regex: "(\d{6})_(\d{4})"
+    
+  # JPG Collector Settings  
+  jpg:
+    batch_size: 100
+    enable_outlier_detection: true
+    outlier_dirs: ["outliers"]
+    time_format_regex: "(\d{6})_(\d{4,6})"
+    extract_exif: true
+    extract_gps: true
+
 # Security Settings (Optional)
 # security:
   # encryption_key: "your_secret_key"  # Override with environment variable ENCRYPTION_KEY
