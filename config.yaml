@@ -1,0 +1,30 @@
+# COR Data Analysis Configuration
+# This is the default configuration file for the COR Data Analysis application.
+# You can customize these settings to match your environment.
+
+# Directory Configuration
+directories:
+  # base_directory: "/path/to/base"  # Uncomment to set custom base directory
+  # mp3_directory: "/path/to/mp3_files"  # Uncomment to set custom MP3 directory
+  # jpg_directory: "/path/to/jpg_files"  # Uncomment to set custom JPG directory
+  # output_directory: "/path/to/output"  # Uncomment to set custom output directory
+  # logs_directory: "/path/to/logs"  # Uncomment to set custom logs directory
+
+# Logging Configuration
+logging:
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  matplotlib_level: "WARNING"  # Logging level for matplotlib library
+
+# Feature Flags
+features:
+  enable_logging_to_file: true
+  enable_mp3_processing: true
+  enable_jpg_processing: true
+  enable_chart_generation: true
+
+# Security Settings (Optional)
+# security:
+  # encryption_key: "your_secret_key"  # Override with environment variable ENCRYPTION_KEY
+  # ssl_cert_path: "/path/to/cert"  # Override with environment variable SSL_CERT_PATH
+  # ssl_key_path: "/path/to/key"  # Override with environment variable SSL_KEY_PATH
