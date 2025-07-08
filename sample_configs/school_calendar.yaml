@@ -1,0 +1,69 @@
+# Sample School Calendar Configuration
+# Defines school years, collection periods, holidays, and special days
+
+school_years:
+  "2022-2023":
+    start_date: "2022-08-29"
+    end_date: "2023-06-15"
+    periods:
+      "P1 SY 22-23":
+        start_date: "2022-09-01"
+        end_date: "2022-11-30"
+        color: "#4286f4"
+      "P2 SY 22-23":
+        start_date: "2022-12-01"
+        end_date: "2023-02-28"
+        color: "#41f4a0"
+      "P3 SY 22-23":
+        start_date: "2023-03-01"
+        end_date: "2023-06-15"
+        color: "#f4c141"
+    holidays:
+      - "2022-09-05"  # Labor Day
+      - "2022-11-24"  # Thanksgiving
+      - "2022-11-25"  # Day after Thanksgiving
+      - "2022-12-24"  # Christmas Eve
+      - "2022-12-25"  # Christmas Day
+      - "2023-01-01"  # New Year's Day
+      - "2023-01-16"  # MLK Day
+      - "2023-05-29"  # Memorial Day
+    professional_development_days:
+      - "2022-10-14"
+      - "2023-01-27"
+      - "2023-04-07"
+    virtual_days:
+      - "2023-02-10"
+      - "2023-03-17"
+
+  "2023-2024":
+    start_date: "2023-08-28"
+    end_date: "2024-06-14"
+    periods:
+      "P1 SY 23-24":
+        start_date: "2023-09-01"
+        end_date: "2023-11-30"
+        color: "#4286f4"
+      "P2 SY 23-24":
+        start_date: "2023-12-01"
+        end_date: "2024-02-28"
+        color: "#41f4a0"
+      "P3 SY 23-24":
+        start_date: "2024-03-01"
+        end_date: "2024-06-14"
+        color: "#f4c141"
+    holidays:
+      - "2023-09-04"  # Labor Day
+      - "2023-11-23"  # Thanksgiving
+      - "2023-11-24"  # Day after Thanksgiving
+      - "2023-12-24"  # Christmas Eve
+      - "2023-12-25"  # Christmas Day
+      - "2024-01-01"  # New Year's Day
+      - "2024-01-15"  # MLK Day
+      - "2024-05-27"  # Memorial Day
+    professional_development_days:
+      - "2023-10-13"
+      - "2024-01-26"
+      - "2024-04-05"
+    virtual_days:
+      - "2024-02-09"
+      - "2024-03-15"

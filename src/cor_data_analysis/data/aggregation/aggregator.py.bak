@@ -1,0 +1,789 @@
+"""
+Data Aggregation Framework
+
+This module provides a flexible, multi-level data aggregation framework for analyzing
+file metadata. It supports aggregation by various time periods (day, week, month)
+and by activities, with support for mid-year schedule changes.
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Tuple, Optional, Any, Union, Set
+from datetime import datetime, date, time, timedelta
+import logging
+from pathlib import Path
+from ...calendar import SchoolCalendar, ActivitySchedule
+
+
+class DataAggregator:
+    """
+    Main class for data aggregation operations across multiple dimensions.
+    Supports time-based and activity-based aggregation with flexible grouping.
+    """
+    def __init__(
+        self, 
+        calendar: Optional[SchoolCalendar] = None,
+        activity_schedule: Optional[ActivitySchedule] = None
+    ):
+        """
+        Initialize the DataAggregator with optional calendar and activity schedule.
+        
+        Args:
+            calendar: SchoolCalendar for date ranges and periods
+            activity_schedule: ActivitySchedule for mapping timestamps to activities
+        """
+        self.calendar = calendar
+        self.activity_schedule = activity_schedule
+    
+    def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Central data preparation method to ensure consistent preprocessing.
+        Creates a copy of the dataframe and adds necessary columns.
+        
+        Args:
+            df: Input DataFrame with file metadata
+            
+        Returns:
+            Prepared DataFrame with datetime columns and activity mapping
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+            
+        # Create a copy to avoid modifying the original
+        df_copy = df.copy()
+        
+        # Add datetime columns
+        df_copy = self._ensure_datetime_columns(df_copy)
+        
+        # Add activity columns if we have an activity schedule
+        if self.activity_schedule is not None:
+            # Add activity name
+            df_copy['Activity'] = df_copy.apply(
+                lambda row: self.activity_schedule.get_activity_name_for_datetime(row['DateTime']) 
+                    if 'DateTime' in df_copy.columns else None,
+                axis=1
+            )
+            
+            # Add activity category
+            def get_category(row):
+                if not self.activity_schedule or 'DateTime' not in df_copy.columns:
+                    return None
+                activity = self.activity_schedule.get_activity_for_datetime(row['DateTime'])
+                return activity.category if activity else None
+            
+            df_copy['ActivityCategory'] = df_copy.apply(get_category, axis=1)
+        
+        # Standardize missing activity/category data
+        if 'Activity' in df_copy.columns:
+            df_copy['Activity'] = df_copy['Activity'].fillna('Unknown')
+        
+        if 'ActivityCategory' in df_copy.columns:
+            df_copy['ActivityCategory'] = df_copy['ActivityCategory'].fillna('Unknown')
+            
+        return df_copy
+        
+    def _ensure_datetime_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Ensures that the DataFrame has the necessary DateTime columns.
+        Combines Date and Time columns if they exist, and handles missing values.
+        
+        Args:
+            df: Input DataFrame with potentially separate Date and Time columns
+            
+        Returns:
+            DataFrame with DateTime columns added
+        """
+        if df is None or df.empty:
+            return df
+        
+        # Don't modify if DateTime already exists
+        if 'DateTime' in df.columns:
+            return df
+            
+        df_copy = df.copy()
+        
+        # If we have both Date and Time, combine them
+        if 'Date' in df_copy.columns and 'Time' in df_copy.columns:
+            # Convert Date column to datetime if it's not already
+            if not pd.api.types.is_datetime64_dtype(df_copy['Date']):
+                df_copy['Date'] = pd.to_datetime(df_copy['Date'], errors='coerce')
+            
+            # Combine Date and Time to create DateTime
+            try:
+                df_copy['DateTime'] = pd.to_datetime(
+                    df_copy['Date'].dt.strftime('%Y-%m-%d') + ' ' + 
+                    df_copy['Time'], 
+                    errors='coerce'
+                )
+            except (ValueError, AttributeError) as e:
+                # Handle errors gracefully
+                logging.warning(f"Error creating DateTime column: {e}")
+                df_copy['DateTime'] = pd.NaT
+        
+        # If we have Date but no Time, use midnight as default time
+        elif 'Date' in df_copy.columns:
+            if not pd.api.types.is_datetime64_dtype(df_copy['Date']):
+                df_copy['Date'] = pd.to_datetime(df_copy['Date'], errors='coerce')
+            df_copy['DateTime'] = df_copy['Date']
+            
+        return df_copy
+    
+    def aggregate_by_period(self, mp3_df: pd.DataFrame, jpg_df: pd.DataFrame) -> Dict:
+        """
+        Aggregate data by collection periods defined in the school calendar.
+        
+        Args:
+            mp3_df: DataFrame containing MP3 metadata
+            jpg_df: DataFrame containing JPG metadata
+            
+        Returns:
+            Dictionary where keys are period names and values contain aggregated metrics
+        """
+        results = {}
+        
+        if self.calendar is None:
+            logging.warning("No calendar provided. Cannot aggregate by period.")
+            return results
+        
+        # Prepare data upfront
+        mp3_df_processed = self.prepare_data(mp3_df)
+        jpg_df_processed = self.prepare_data(jpg_df)
+        
+        # Get a list of all periods across all school years
+        all_periods = []
+        for school_year in self.calendar.school_years.values():
+            all_periods.extend(school_year.periods.values())
+        
+        for period in all_periods:
+            period_name = period.name
+            results[period_name] = {}
+            
+            # Filter data for this period
+            year_mp3 = self._filter_by_date_range(
+                mp3_df_processed, 
+                period.start_date,
+                period.end_date
+            )
+            
+            year_jpg = self._filter_by_date_range(
+                jpg_df_processed,
+                period.start_date,
+                period.end_date
+            )
+            
+            # Skip periods with no data
+            if year_mp3.empty and year_jpg.empty:
+                logging.debug(f"No data found for period {period_name}, skipping")
+                continue
+            
+            # Calculate base metrics
+            total_mp3_count = len(year_mp3)
+            total_jpg_count = len(year_jpg)
+            
+            # Calculate collection days
+            collection_days = self._calculate_collection_days(year_mp3, year_jpg)
+            
+            # Calculate period metrics
+            period_metrics = {
+                'start_date': period.start_date.isoformat() if hasattr(period.start_date, 'isoformat') else str(period.start_date),
+                'end_date': period.end_date.isoformat() if hasattr(period.end_date, 'isoformat') else str(period.end_date),
+                'mp3_count': total_mp3_count,
+                'jpg_count': total_jpg_count,
+                'collection_days': collection_days,
+                'average_mp3_per_day': (total_mp3_count / collection_days) if collection_days > 0 else 0.0,
+                'average_jpg_per_day': (total_jpg_count / collection_days) if collection_days > 0 else 0.0
+            }
+            
+            # Add file size metrics
+            size_metrics = self._calculate_size_metrics(year_mp3, year_jpg)
+            period_metrics.update(size_metrics)
+            
+            # Add duration metrics
+            duration_metrics = self._calculate_duration_metrics(year_mp3, collection_days)
+            period_metrics.update(duration_metrics)
+            
+            # Add activity and category distributions
+            distributions = self._calculate_distributions(
+                year_mp3, 
+                year_jpg, 
+                total_mp3_count, 
+                total_jpg_count
+            )
+            period_metrics.update(distributions)
+            
+            results[period_name] = period_metrics
+        
+        return results
+    
+    def aggregate_by_time(
+        self, 
+        mp3_df: pd.DataFrame, 
+        jpg_df: pd.DataFrame,
+        time_unit: str = 'month'
+    ) -> Dict:
+        """
+        Aggregate data by time units (day, week, month).
+        Supports ISO week numbering for weekly aggregation.
+        
+        Args:
+            mp3_df: DataFrame containing MP3 metadata
+            jpg_df: DataFrame containing JPG metadata
+            time_unit: Time unit for aggregation ('day', 'week', or 'month')
+            
+        Returns:
+            Dictionary where keys are time periods and values contain aggregated metrics
+        """
+        results = {}
+        
+        # Validate time_unit
+        if time_unit not in ['day', 'week', 'month']:
+            logging.error(f"Invalid time_unit: {time_unit}. Must be 'day', 'week', or 'month'")
+            return results
+        
+        # Prepare data upfront
+        mp3_df_processed = self.prepare_data(mp3_df)
+        jpg_df_processed = self.prepare_data(jpg_df)
+        
+        # Skip if both DataFrames are empty
+        if mp3_df_processed.empty and jpg_df_processed.empty:
+            return results
+            
+        # Create period column based on time_unit
+        if not mp3_df_processed.empty and 'Date' in mp3_df_processed.columns:
+            if time_unit == 'day':
+                mp3_df_processed['Period'] = mp3_df_processed['Date'].dt.strftime('%Y-%m-%d')
+            elif time_unit == 'week':
+                mp3_df_processed['Period'] = mp3_df_processed['Date'].dt.strftime('%G-W%V')
+            elif time_unit == 'month':
+                mp3_df_processed['Period'] = mp3_df_processed['Date'].dt.strftime('%Y-%m')
+        
+        if not jpg_df_processed.empty and 'Date' in jpg_df_processed.columns:
+            if time_unit == 'day':
+                jpg_df_processed['Period'] = jpg_df_processed['Date'].dt.strftime('%Y-%m-%d')
+            elif time_unit == 'week':
+                jpg_df_processed['Period'] = jpg_df_processed['Date'].dt.strftime('%G-W%V')
+            elif time_unit == 'month':
+                jpg_df_processed['Period'] = jpg_df_processed['Date'].dt.strftime('%Y-%m')
+        
+        # Get all periods
+        mp3_periods = set() if mp3_df_processed.empty or 'Period' not in mp3_df_processed.columns else set(mp3_df_processed['Period'])
+        jpg_periods = set() if jpg_df_processed.empty or 'Period' not in jpg_df_processed.columns else set(jpg_df_processed['Period'])
+        all_periods = sorted(mp3_periods.union(jpg_periods))
+        
+        for period in all_periods:
+            # Filter data for this period
+            period_mp3 = mp3_df_processed[mp3_df_processed['Period'] == period] if not mp3_df_processed.empty and 'Period' in mp3_df_processed.columns else pd.DataFrame()
+            period_jpg = jpg_df_processed[jpg_df_processed['Period'] == period] if not jpg_df_processed.empty and 'Period' in jpg_df_processed.columns else pd.DataFrame()
+            
+            # Skip periods with no data
+            if period_mp3.empty and period_jpg.empty:
+                continue
+                
+            # Get date range for the period
+            start_date, end_date = self._get_date_range_for_period(period, time_unit)
+            
+            # Calculate base metrics
+            total_mp3_count = len(period_mp3)
+            total_jpg_count = len(period_jpg)
+            
+            # Calculate collection days
+            collection_days = self._calculate_collection_days(period_mp3, period_jpg)
+            
+            # Initialize period metrics
+            period_metrics = {
+                'start_date': start_date.isoformat() if start_date and hasattr(start_date, 'isoformat') else str(start_date) if start_date else None,
+                'end_date': end_date.isoformat() if end_date and hasattr(end_date, 'isoformat') else str(end_date) if end_date else None,
+                'mp3_count': total_mp3_count,
+                'jpg_count': total_jpg_count,
+                'collection_days': collection_days,
+                'average_mp3_per_day': (total_mp3_count / collection_days) if collection_days > 0 else 0.0,
+                'average_jpg_per_day': (total_jpg_count / collection_days) if collection_days > 0 else 0.0,
+            }
+            
+            # Add file size metrics
+            size_metrics = self._calculate_size_metrics(period_mp3, period_jpg)
+            period_metrics.update(size_metrics)
+            
+            # Add duration metrics
+            duration_metrics = self._calculate_duration_metrics(period_mp3, collection_days)
+            period_metrics.update(duration_metrics)
+            
+            # Add activity and category distributions
+            distributions = self._calculate_distributions(
+                period_mp3, 
+                period_jpg, 
+                total_mp3_count, 
+                total_jpg_count
+            )
+            period_metrics.update(distributions)
+            
+            results[period] = period_metrics
+        
+        return results
+    
+    def aggregate_by_activity(
+        self, 
+        mp3_df: pd.DataFrame, 
+        jpg_df: pd.DataFrame,
+        include_periods: bool = True
+    ) -> Dict:
+        """
+        Aggregate data by classroom activities, optionally breaking down by collection periods.
+        
+        Args:
+            mp3_df: DataFrame containing MP3 metadata
+            jpg_df: DataFrame containing JPG metadata
+            include_periods: Whether to include period breakdowns
+            
+        Returns:
+            Dictionary where keys are activities and values contain aggregated metrics
+        """
+        results = {}
+        
+        # Prepare data upfront
+        mp3_df_processed = self.prepare_data(mp3_df)
+        jpg_df_processed = self.prepare_data(jpg_df)
+        
+        # Skip if both DataFrames are empty or no activity schedule
+        if (mp3_df_processed.empty and jpg_df_processed.empty) or self.activity_schedule is None:
+            return results
+            
+        # Get all activities from both dataframes
+        mp3_activities = set() if mp3_df_processed.empty or 'Activity' not in mp3_df_processed.columns else set(mp3_df_processed['Activity'].dropna())
+        jpg_activities = set() if jpg_df_processed.empty or 'Activity' not in jpg_df_processed.columns else set(jpg_df_processed['Activity'].dropna())
+        all_activities = sorted(mp3_activities.union(jpg_activities))
+        
+        if not all_activities:
+            all_activities = ['Unknown']
+        
+        for activity in all_activities:
+            # Filter data for this activity
+            activity_mp3 = mp3_df_processed[mp3_df_processed['Activity'] == activity] if not mp3_df_processed.empty and 'Activity' in mp3_df_processed.columns else pd.DataFrame()
+            activity_jpg = jpg_df_processed[jpg_df_processed['Activity'] == activity] if not jpg_df_processed.empty and 'Activity' in jpg_df_processed.columns else pd.DataFrame()
+            
+            # Skip activities with no data
+            if activity_mp3.empty and activity_jpg.empty:
+                continue
+                
+            # Calculate base metrics
+            total_mp3_count = len(activity_mp3)
+            total_jpg_count = len(activity_jpg)
+            
+            # Calculate activity days (days where this specific activity has data)
+            # This improves on the previous implementation by using activity-specific days
+            activity_mp3_dates = set() if activity_mp3.empty or 'Date' not in activity_mp3.columns else set(activity_mp3['Date'].dt.date)
+            activity_jpg_dates = set() if activity_jpg.empty or 'Date' not in activity_jpg.columns else set(activity_jpg['Date'].dt.date)
+            activity_days = len(activity_mp3_dates.union(activity_jpg_dates))
+            
+            # Calculate collection days (all days with any data)
+            collection_days = self._calculate_collection_days(activity_mp3, activity_jpg)
+            
+            # Initialize activity metrics
+            activity_metrics = {
+                'mp3_count': total_mp3_count,
+                'jpg_count': total_jpg_count,
+                'mp3_unique_dates': len(activity_mp3_dates),
+                'jpg_unique_dates': len(activity_jpg_dates),
+                'collection_days': collection_days,
+                'activity_days': activity_days,
+                'average_mp3_per_activity_day': (total_mp3_count / activity_days) if activity_days > 0 else 0.0,
+                'average_jpg_per_activity_day': (total_jpg_count / activity_days) if activity_days > 0 else 0.0,
+                'average_mp3_per_collection_day': (total_mp3_count / collection_days) if collection_days > 0 else 0.0,
+                'average_jpg_per_collection_day': (total_jpg_count / collection_days) if collection_days > 0 else 0.0,
+            }
+            
+            # Add file size metrics
+            size_metrics = self._calculate_size_metrics(activity_mp3, activity_jpg)
+            activity_metrics.update(size_metrics)
+            
+            # Add duration metrics
+            duration_metrics = self._calculate_duration_metrics(activity_mp3, activity_days)
+            activity_metrics.update(duration_metrics)
+            
+            # Get the category for this activity
+            category = 'Unknown'
+            if activity != 'Unknown' and self.activity_schedule:
+                try:
+                    activity_obj = self.activity_schedule.get_activity_by_name(activity)
+                    if activity_obj and activity_obj.category:
+                        category = activity_obj.category
+                except Exception as e:
+                    logging.error(f"Error getting category for activity {activity}: {e}")
+            
+            activity_metrics['category'] = category
+            
+            # Include period breakdowns if requested
+            if include_periods and self.calendar:
+                periods_data = {}
+                
+                # Get all periods across all school years
+                all_periods = []
+                for school_year in self.calendar.school_years.values():
+                    all_periods.extend(school_year.periods.values())
+                
+                for period in all_periods:
+                    # Filter activity data for this period
+                    period_mp3 = self._filter_by_date_range(
+                        activity_mp3, 
+                        period.start_date,
+                        period.end_date
+                    )
+                    
+                    period_jpg = self._filter_by_date_range(
+                        activity_jpg,
+                        period.start_date,
+                        period.end_date
+                    )
+                    
+                    # Skip periods with no data for this activity
+                    if period_mp3.empty and period_jpg.empty:
+                        continue
+                        
+                    # Calculate period-specific metrics
+                    period_mp3_count = len(period_mp3)
+                    period_jpg_count = len(period_jpg)
+                    
+                    # Calculate period-specific activity days
+                    period_mp3_dates = set() if period_mp3.empty or 'Date' not in period_mp3.columns else set(period_mp3['Date'].dt.date)
+                    period_jpg_dates = set() if period_jpg.empty or 'Date' not in period_jpg.columns else set(period_jpg['Date'].dt.date)
+                    period_activity_days = len(period_mp3_dates.union(period_jpg_dates))
+                    
+                    # Calculate period-specific metrics
+                    period_metrics = {
+                        'mp3_count': period_mp3_count,
+                        'jpg_count': period_jpg_count,
+                        'activity_days': period_activity_days,
+                        'average_mp3_per_day': (period_mp3_count / period_activity_days) if period_activity_days > 0 else 0.0,
+                        'average_jpg_per_day': (period_jpg_count / period_activity_days) if period_activity_days > 0 else 0.0,
+                    }
+                    
+                    # Add period-specific size metrics
+                    period_size_metrics = self._calculate_size_metrics(period_mp3, period_jpg)
+                    period_metrics.update(period_size_metrics)
+                    
+                    # Add period-specific duration metrics
+                    period_duration_metrics = self._calculate_duration_metrics(period_mp3, period_activity_days)
+                    period_metrics.update(period_duration_metrics)
+                    
+                    periods_data[period.name] = period_metrics
+                
+                activity_metrics['periods'] = periods_data
+            
+            results[activity] = activity_metrics
+        
+        return results
+    
+    def aggregate_by_activity_category(self, mp3_df: pd.DataFrame, jpg_df: pd.DataFrame) -> Dict:
+        """
+        Aggregate data by activity category.
+        
+        Args:
+            mp3_df: DataFrame containing MP3 metadata
+            jpg_df: DataFrame containing JPG metadata
+            
+        Returns:
+            Dictionary where keys are categories and values contain aggregated metrics
+        """
+        results = {}
+        
+        # Prepare data upfront
+        mp3_df_processed = self.prepare_data(mp3_df)
+        jpg_df_processed = self.prepare_data(jpg_df)
+        
+        # Skip if both DataFrames are empty or no activity schedule
+        if (mp3_df_processed.empty and jpg_df_processed.empty) or self.activity_schedule is None:
+            return results
+            
+        # Get all categories from both dataframes
+        mp3_categories = set() if mp3_df_processed.empty or 'ActivityCategory' not in mp3_df_processed.columns else set(mp3_df_processed['ActivityCategory'].dropna())
+        jpg_categories = set() if jpg_df_processed.empty or 'ActivityCategory' not in jpg_df_processed.columns else set(jpg_df_processed['ActivityCategory'].dropna())
+        all_categories = sorted(mp3_categories.union(jpg_categories))
+        
+        if not all_categories:
+            all_categories = ['Unknown']
+        
+        for category in all_categories:
+            # Filter data for this category
+            category_mp3 = mp3_df_processed[mp3_df_processed['ActivityCategory'] == category] if not mp3_df_processed.empty and 'ActivityCategory' in mp3_df_processed.columns else pd.DataFrame()
+            category_jpg = jpg_df_processed[jpg_df_processed['ActivityCategory'] == category] if not jpg_df_processed.empty and 'ActivityCategory' in jpg_df_processed.columns else pd.DataFrame()
+            
+            # Skip categories with no data
+            if category_mp3.empty and category_jpg.empty:
+                continue
+                
+            # Calculate base metrics
+            total_mp3_count = len(category_mp3)
+            total_jpg_count = len(category_jpg)
+            
+            # Calculate category days (days where this specific category has data)
+            category_mp3_dates = set() if category_mp3.empty or 'Date' not in category_mp3.columns else set(category_mp3['Date'].dt.date)
+            category_jpg_dates = set() if category_jpg.empty or 'Date' not in category_jpg.columns else set(category_jpg['Date'].dt.date)
+            category_days = len(category_mp3_dates.union(category_jpg_dates))
+            
+            # Calculate collection days (all days with any data)
+            collection_days = self._calculate_collection_days(category_mp3, category_jpg)
+            
+            # Initialize category metrics
+            category_metrics = {
+                'mp3_count': total_mp3_count,
+                'jpg_count': total_jpg_count,
+                'mp3_unique_dates': len(category_mp3_dates),
+                'jpg_unique_dates': len(category_jpg_dates),
+                'category_days': category_days,
+                'collection_days': collection_days,
+                'average_mp3_per_category_day': (total_mp3_count / category_days) if category_days > 0 else 0.0,
+                'average_jpg_per_category_day': (total_jpg_count / category_days) if category_days > 0 else 0.0,
+                'average_mp3_per_collection_day': (total_mp3_count / collection_days) if collection_days > 0 else 0.0,
+                'average_jpg_per_collection_day': (total_jpg_count / collection_days) if collection_days > 0 else 0.0,
+            }
+            
+            # Add file size metrics
+            size_metrics = self._calculate_size_metrics(category_mp3, category_jpg)
+            category_metrics.update(size_metrics)
+            
+            # Add duration metrics
+            duration_metrics = self._calculate_duration_metrics(category_mp3, category_days)
+            category_metrics.update(duration_metrics)
+            
+            # Add activities in this category
+            activities_in_category = {}
+            
+            # Get activities from MP3
+            if not category_mp3.empty and 'Activity' in category_mp3.columns:
+                mp3_activity_counts = category_mp3['Activity'].value_counts()
+                for activity, count in mp3_activity_counts.items():
+                    if activity not in activities_in_category:
+                        activities_in_category[activity] = {'mp3_count': 0, 'jpg_count': 0}
+                    activities_in_category[activity]['mp3_count'] = count
+                    
+            # Get activities from JPG
+            if not category_jpg.empty and 'Activity' in category_jpg.columns:
+                jpg_activity_counts = category_jpg['Activity'].value_counts()
+                for activity, count in jpg_activity_counts.items():
+                    if activity not in activities_in_category:
+                        activities_in_category[activity] = {'mp3_count': 0, 'jpg_count': 0}
+                    activities_in_category[activity]['jpg_count'] = count
+            
+            # Calculate percentages for each activity
+            for activity, counts in activities_in_category.items():
+                mp3_percentage = (counts['mp3_count'] / total_mp3_count * 100) if total_mp3_count > 0 else 0.0
+                jpg_percentage = (counts['jpg_count'] / total_jpg_count * 100) if total_jpg_count > 0 else 0.0
+                
+                activities_in_category[activity]['mp3_percentage'] = mp3_percentage
+                activities_in_category[activity]['jpg_percentage'] = jpg_percentage
+            
+            category_metrics['activities'] = activities_in_category
+            
+            results[category] = category_metrics
+        
+        return results
+    
+    def aggregate_by_activity_and_period(self, mp3_df: pd.DataFrame, jpg_df: pd.DataFrame) -> Dict:
+        """
+        Aggregate data by activity and collection period.
+        
+        Args:
+            mp3_df: DataFrame containing MP3 metadata
+            jpg_df: DataFrame containing JPG metadata
+            
+        Returns:
+            Dictionary with period keys, each containing a nested dictionary of activity metrics
+        """
+        results = {}
+        
+        if self.calendar is None or self.activity_schedule is None:
+            logging.warning("Cannot aggregate by activity and period without calendar and activity schedule")
+            return results
+            
+        # Prepare data upfront
+        mp3_df_processed = self.prepare_data(mp3_df)
+        jpg_df_processed = self.prepare_data(jpg_df)
+        
+        # Get all periods across all school years
+        all_periods = []
+        for school_year in self.calendar.school_years.values():
+            all_periods.extend(school_year.periods.values())
+            
+        for period in all_periods:
+            period_name = period.name
+            results[period_name] = {}
+            
+            # Filter data for this period
+            period_mp3 = self._filter_by_date_range(
+                mp3_df_processed, 
+                period.start_date,
+                period.end_date
+            )
+            
+            period_jpg = self._filter_by_date_range(
+                jpg_df_processed,
+                period.start_date,
+                period.end_date
+            )
+            
+            # Skip periods with no data
+            if period_mp3.empty and period_jpg.empty:
+                logging.debug(f"No data found for period {period_name}, skipping")
+                continue
+                
+            # Get all activities in this period
+            mp3_activities = set() if period_mp3.empty or 'Activity' not in period_mp3.columns else set(period_mp3['Activity'].dropna())
+            jpg_activities = set() if period_jpg.empty or 'Activity' not in period_jpg.columns else set(period_jpg['Activity'].dropna())
+            all_activities = sorted(mp3_activities.union(jpg_activities))
+            
+            if not all_activities:
+                all_activities = ['Unknown']
+            
+            # Process each activity within this period
+            for activity in all_activities:
+                # Filter data for this activity
+                activity_mp3 = period_mp3[period_mp3['Activity'] == activity] if not period_mp3.empty and 'Activity' in period_mp3.columns else pd.DataFrame()
+                activity_jpg = period_jpg[period_jpg['Activity'] == activity] if not period_jpg.empty and 'Activity' in period_jpg.columns else pd.DataFrame()
+                
+                # Skip activities with no data
+                if activity_mp3.empty and activity_jpg.empty:
+                    continue
+                    
+                # Calculate base metrics
+                mp3_count = len(activity_mp3)
+                jpg_count = len(activity_jpg)
+                
+                # Calculate activity days (days where this specific activity has data in this period)
+                activity_mp3_dates = set() if activity_mp3.empty or 'Date' not in activity_mp3.columns else set(activity_mp3['Date'].dt.date)
+                activity_jpg_dates = set() if activity_jpg.empty or 'Date' not in activity_jpg.columns else set(activity_jpg['Date'].dt.date)
+                activity_days = len(activity_mp3_dates.union(activity_jpg_dates))
+                
+                # Initialize activity metrics
+                activity_metrics = {
+                    'mp3_count': mp3_count,
+                    'jpg_count': jpg_count,
+                    'mp3_unique_dates': len(activity_mp3_dates),
+                    'jpg_unique_dates': len(activity_jpg_dates),
+                    'activity_days': activity_days,
+                    'average_mp3_per_day': (mp3_count / activity_days) if activity_days > 0 else 0.0,
+                    'average_jpg_per_day': (jpg_count / activity_days) if activity_days > 0 else 0.0,
+                }
+                
+                # Add file size metrics
+                size_metrics = self._calculate_size_metrics(activity_mp3, activity_jpg)
+                activity_metrics.update(size_metrics)
+                
+                # Add duration metrics
+                duration_metrics = self._calculate_duration_metrics(activity_mp3, activity_days)
+                activity_metrics.update(duration_metrics)
+                
+                # Get the category for this activity
+                category = 'Unknown'
+                if activity != 'Unknown' and self.activity_schedule:
+                    try:
+                        activity_obj = self.activity_schedule.get_activity_by_name(activity)
+                        if activity_obj and activity_obj.category:
+                            category = activity_obj.category
+                    except Exception as e:
+                        logging.error(f"Error getting category for activity {activity}: {e}")
+                
+                activity_metrics['category'] = category
+                
+                # Store activity metrics
+                results[period_name][activity] = activity_metrics
+                
+        return results
+        
+    def aggregate_by_school_year(self, mp3_df, jpg_df):
+        """
+        Aggregates MP3 and JPG file metadata by school year.
+
+        This method calculates key metrics for each school year defined in the calendar,
+        including file counts, sizes, durations, and distributions by activity
+        and category. It is designed to be robust against missing data and
+        inconsistent dictionary structures, which resolves the "ValueError: All arrays
+        must be of the same length" error.
+
+        Args:
+            mp3_df (pd.DataFrame): DataFrame containing MP3 metadata.
+            jpg_df (pd.DataFrame): DataFrame containing JPG metadata.
+
+        Returns:
+            dict: A dictionary where keys are school year names and values are
+                  nested dictionaries of aggregated metrics for that year.
+        """
+        results = {}
+        if self.calendar is None:
+            logging.warning("No SchoolCalendar provided; cannot aggregate by school year.")
+            return results
+
+        # --- 1. Data Preparation ---
+        # Use the central data preparation method
+        mp3_df_processed = self.prepare_data(mp3_df)
+        jpg_df_processed = self.prepare_data(jpg_df)
+
+        # --- 2. Iterate Through School Years ---
+        try:
+            school_years = self.calendar.get_years()
+        except Exception as e:
+            logging.error(f"Could not retrieve school years from calendar: {e}")
+            return {}
+
+        for year_name, (start_date, end_date) in school_years.items():
+            logging.info(f"Processing school year: {year_name} ({start_date} to {end_date})")
+            
+            # Filter data for the current school year
+            year_mp3 = self._filter_by_date_range(mp3_df_processed, start_date, end_date)
+            year_jpg = self._filter_by_date_range(jpg_df_processed, start_date, end_date)
+            
+            if year_mp3.empty and year_jpg.empty:
+                logging.info(f"No data for school year {year_name}, skipping.")
+                continue
+            
+            # --- 3. Calculate Base Metrics ---
+            total_mp3_count = len(year_mp3)
+            total_jpg_count = len(year_jpg)
+            
+            # Calculate collection days
+            collection_days = self._calculate_collection_days(year_mp3, year_jpg)
+            
+            # Initialize year metrics with consistent structure
+            year_metrics = {
+                'start_date': start_date.isoformat() if hasattr(start_date, 'isoformat') else str(start_date),
+                'end_date': end_date.isoformat() if hasattr(end_date, 'isoformat') else str(end_date),
+                'mp3_count': total_mp3_count,
+                'jpg_count': total_jpg_count,
+                'collection_days': collection_days,
+                'average_mp3_per_day': (total_mp3_count / collection_days) if collection_days > 0 else 0.0,
+                'average_jpg_per_day': (total_jpg_count / collection_days) if collection_days > 0 else 0.0,
+            }
+            
+            # Add file size metrics
+            size_metrics = self._calculate_size_metrics(year_mp3, year_jpg)
+            year_metrics.update(size_metrics)
+            
+            # Add duration metrics
+            duration_metrics = self._calculate_duration_metrics(year_mp3, collection_days)
+            year_metrics.update(duration_metrics)
+            
+            # Add activity and category distributions
+            distributions = self._calculate_distributions(year_mp3, year_jpg, total_mp3_count, total_jpg_count)
+            year_metrics.update(distributions)
+            
+            # --- 4. Get periods for this school year ---
+            try:
+                periods = self.calendar.get_periods_in_year(year_name)
+                if periods is not None:
+                    # Convert period info to serializable format
+                    periods_list = [
+                        {
+                            'name': period_name,
+                            'start_date': period_start_date.isoformat() if hasattr(period_start_date, 'isoformat') else str(period_start_date),
+                            'end_date': period_end_date.isoformat() if hasattr(period_end_date, 'isoformat') else str(period_end_date)
+                        }
+                        for period_name, (period_start_date, period_end_date) in periods.items()
+                    ]
+                    year_metrics['periods'] = periods_list
+            except Exception as e:
+                logging.error(f"Error getting periods for year {year_name}: {e}")
+                year_metrics['periods'] = []
+            
+            # Add year metrics to results
+            results[year_name] = year_metrics
+            
+        return results
