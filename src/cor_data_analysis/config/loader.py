@@ -55,42 +55,42 @@ def load_yaml_config(path: Union[str, Path]) -> Dict[str, Any]:
 
 def load_env_config() -> Dict[str, Any]:
     """Load configuration from environment variables.
-    
+
     Looks for environment variables with the prefix COR_ and converts them
-    to a nested dictionary structure. For example:
-    
-    COR_DIRECTORIES_BASE_DIRECTORY=/path/to/base
-    
+    to a nested dictionary structure. A double underscore '__' is used
+    to indicate nesting. For example:
+
+    COR_DIRECTORIES__BASE_DIRECTORY=/path/to/base
+
     becomes:
-    
+
     {
         "directories": {
             "base_directory": "/path/to/base"
         }
     }
-    
+
     Returns:
         Configuration dictionary from environment variables
     """
     env_config: Dict[str, Any] = {}
-    
+
     for key, value in os.environ.items():
         if not key.startswith("COR_"):
             continue
-            
-        # Remove prefix and split by underscore
-        parts = key[4:].lower().split("_")
-        
+
+        # Remove prefix and split by double underscore for nesting
+        parts = key[4:].lower().split("__")
+
         # Build nested dictionary
         current = env_config
         for part in parts[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-            
+            # Create nested dict if it doesn't exist
+            current = current.setdefault(part, {})
+
         # Set value for the last part
         current[parts[-1]] = value
-        
+
     return env_config
 
 

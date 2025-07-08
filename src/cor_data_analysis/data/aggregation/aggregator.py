@@ -13,7 +13,7 @@ from datetime import datetime, date, time, timedelta
 import logging
 from pathlib import Path
 from cor_data_analysis.data.calendar.school_calendar import SchoolCalendar
-from cor_data_analysis.data.calendar.activity_schedule import ActivitySchedule
+from cor_data_analysis.data.schedule.activity_schedule import ActivitySchedule
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

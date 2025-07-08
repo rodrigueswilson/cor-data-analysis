@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 School Calendar Module
 
@@ -16,65 +18,35 @@ import pandas as pd
 
 
 @dataclass
-class CollectionPeriod:
-    """Represents a data collection period within a school year."""
+class Holiday:
+    """Represents a holiday or break period."""
     name: str
     start_date: date
     end_date: date
-    color: str = "#FFFFFF"  # Display color for visualizations
-    
-    @classmethod
-    def from_dict(cls, name: str, data: Dict[str, Any]) -> 'CollectionPeriod':
-        """Create a CollectionPeriod from a name and dictionary."""
-        return cls(
-            name=name,
-            start_date=pd.to_datetime(data['start_date']).date(),
-            end_date=pd.to_datetime(data['end_date']).date(),
-            color=data.get('color', "#FFFFFF")
-        )
-    
+
     def contains_date(self, d: date) -> bool:
-        """Check if this period contains the given date."""
+        """Check if this holiday period contains the given date."""
+        return self.start_date <= d <= self.end_date
+
+@dataclass
+class SpecialPeriod:
+    """Represents a special period like exams or testing."""
+    name: str
+    start_date: date
+    end_date: date
+
+    def contains_date(self, d: date) -> bool:
+        """Check if this special period contains the given date."""
         return self.start_date <= d <= self.end_date
 
 
 @dataclass
 class SchoolYear:
-    """Represents a school year with collection periods and special days."""
-    name: str
+    """Represents a school year with its main dates and periods."""
     start_date: date
     end_date: date
-    periods: Dict[str, CollectionPeriod]
-    holidays: Set[date]
-    professional_development_days: Set[date]
-    virtual_days: Set[date]
-    
-    @classmethod
-    def from_dict(cls, name: str, data: Dict[str, Any]) -> 'SchoolYear':
-        """Create a SchoolYear from a name and dictionary."""
-        # Parse basic year info
-        start_date = pd.to_datetime(data['start_date']).date()
-        end_date = pd.to_datetime(data['end_date']).date()
-        
-        # Parse collection periods
-        periods = {}
-        for period_name, period_data in data.get('periods', {}).items():
-            periods[period_name] = CollectionPeriod.from_dict(period_name, period_data)
-        
-        # Parse special days
-        holidays = {pd.to_datetime(d).date() for d in data.get('holidays', [])}
-        pd_days = {pd.to_datetime(d).date() for d in data.get('professional_development_days', [])}
-        virtual_days = {pd.to_datetime(d).date() for d in data.get('virtual_days', [])}
-        
-        return cls(
-            name=name,
-            start_date=start_date,
-            end_date=end_date,
-            periods=periods,
-            holidays=holidays,
-            professional_development_days=pd_days,
-            virtual_days=virtual_days
-        )
+    holidays: List[Holiday]
+    special_periods: List[SpecialPeriod]
 
 
 class SchoolCalendar:
@@ -89,15 +61,45 @@ class SchoolCalendar:
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'SchoolCalendar':
         """Create a SchoolCalendar from a configuration dictionary."""
         calendar = cls()
+
+        # Parse school year
+        year_data = config_dict.get('school_year', {})
+        if not year_data:
+            raise ValueError("Configuration must contain a 'school_year' section.")
+
+        start_date = pd.to_datetime(year_data['start_date']).date()
+        end_date = pd.to_datetime(year_data['end_date']).date()
+
+        # Parse holidays
+        holidays = []
+        for holiday_data in config_dict.get('holidays', []):
+            holidays.append(Holiday(
+                name=holiday_data['name'],
+                start_date=pd.to_datetime(holiday_data['start_date']).date(),
+                end_date=pd.to_datetime(holiday_data['end_date']).date()
+            ))
+
+        # Parse special periods
+        special_periods = []
+        for period_data in config_dict.get('special_periods', []):
+            special_periods.append(SpecialPeriod(
+                name=period_data['name'],
+                start_date=pd.to_datetime(period_data['start_date']).date(),
+                end_date=pd.to_datetime(period_data['end_date']).date()
+            ))
+
+        # Create the single SchoolYear instance for the calendar
+        school_year_instance = SchoolYear(
+            start_date=start_date,
+            end_date=end_date,
+            holidays=holidays,
+            special_periods=special_periods
+        )
         
-        for year_name, year_data in config_dict.get('school_years', {}).items():
-            try:
-                school_year = SchoolYear.from_dict(year_name, year_data)
-                calendar.school_years[year_name] = school_year
-            except Exception as e:
-                logging.error(f"Error parsing school year {year_name}: {e}")
-                continue
-                
+        # The key for the single school year can be a generated name
+        year_name = f"{start_date.year}-{end_date.year}"
+        calendar.school_years[year_name] = school_year_instance
+
         return calendar
     
     @classmethod
@@ -118,13 +120,13 @@ class SchoolCalendar:
                 return year
         return None
     
-    def find_period_for_date(self, d: date) -> Optional[CollectionPeriod]:
-        """Find the collection period that contains the given date."""
+    def find_period_for_date(self, d: date) -> Optional[SpecialPeriod]:
+        """Find the special period that contains the given date."""
         school_year = self.find_school_year_for_date(d)
         if not school_year:
             return None
-            
-        for period in school_year.periods.values():
+
+        for period in school_year.special_periods:
             if period.contains_date(d):
                 return period
                 
@@ -135,11 +137,11 @@ class SchoolCalendar:
         period = self.find_period_for_date(d)
         return period.name if period else "No Period"
 
-    def get_all_periods(self) -> List[CollectionPeriod]:
-        """Returns a flat list of all collection periods from all school years."""
+    def get_all_periods(self) -> List[SpecialPeriod]:
+        """Returns a flat list of all special periods from all school years."""
         all_periods = []
         for year in self.school_years.values():
-            all_periods.extend(year.periods.values())
+            all_periods.extend(year.special_periods)
         return all_periods
     
     def is_collection_day(self, d: date) -> bool:
@@ -156,15 +158,13 @@ class SchoolCalendar:
         if d.weekday() >= 5:  # 5=Saturday, 6=Sunday
             return False
             
-        # Check if it's a special non-collection day
-        if (d in school_year.holidays or 
-            d in school_year.professional_development_days or
-            d in school_year.virtual_days):
-            return False
+        # Check if it's a holiday
+        for holiday in school_year.holidays:
+            if holiday.contains_date(d):
+                return False
             
-        # Check if it's within a defined collection period
-        period = self.find_period_for_date(d)
-        return period is not None
+        # If it's not a weekend or holiday, it's a collection day
+        return True
     
     def count_collection_days(self, start_date: date, end_date: date, 
                              group_by: str = 'day') -> Dict[str, Any]:

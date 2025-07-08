@@ -15,7 +15,7 @@ sys.path.append(str(project_root / 'src'))
 
 from cor_data_analysis.data.aggregation.aggregator import DataAggregator
 from cor_data_analysis.data.calendar.school_calendar import SchoolCalendar
-from cor_data_analysis.data.calendar.activity_schedule import ActivitySchedule
+from cor_data_analysis.data.schedule.activity_schedule import ActivitySchedule
 
 def _create_test_calendar():
     """Creates a sample SchoolCalendar for the report generation."""

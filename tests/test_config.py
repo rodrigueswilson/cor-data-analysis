@@ -167,32 +167,22 @@ def test_load_yaml_config():
 def test_load_env_config():
     """Test loading configuration from environment variables."""
     with mock.patch.dict(os.environ, {
-        "COR_DIRECTORIES_BASE_DIRECTORY": "/env/base",
-        "COR_FEATURES_ENABLE_MP3_PROCESSING": "false",
+        "COR_DIRECTORIES__BASE_DIRECTORY": "/env/base",
+        "COR_FEATURES__ENABLE_MP3_PROCESSING": "false",
         "OTHER_VAR": "ignored"
     }):
         env_config = load_env_config()
-        
-        # The actual structure based on how load_env_config splits by underscore
+
         expected_config = {
             "directories": {
-                "base": {
-                    "directory": "/env/base"
-                }
+                "base_directory": "/env/base"
             },
             "features": {
-                "enable": {
-                    "mp3": {
-                        "processing": "false"
-                    }
-                }
+                "enable_mp3_processing": "false"
             }
         }
-        
-        # Compare the result against the expected output
+
         assert env_config == expected_config
-        
-        # Verify that non-prefixed vars are ignored
         assert "other_var" not in env_config
 
 

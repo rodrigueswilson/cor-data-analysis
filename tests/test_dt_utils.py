@@ -2,8 +2,6 @@
 
 import calendar
 from datetime import date, timedelta
-import unittest
-
 import pytest
 
 from cor_data_analysis.utils.dt import (
@@ -15,7 +13,7 @@ from cor_data_analysis.utils.dt import (
 )
 
 
-class TestDateTimeUtils(unittest.TestCase):
+class TestDateTimeUtils:
     """Test date and time utility functions."""
     
     def test_get_month_name(self):
@@ -40,19 +38,20 @@ class TestDateTimeUtils(unittest.TestCase):
         with pytest.raises(ValueError):
             get_month_abbr(13)
     
-    def test_parse_date(self):
+    def test_parse_date(self, caplog):
         """Test parsing date strings."""
         # Test various formats
         assert parse_date("2023-07-15") == date(2023, 7, 15)
         assert parse_date("15/07/2023") == date(2023, 7, 15)
         assert parse_date("07/15/2023") == date(2023, 7, 15)
         assert parse_date("2023.07.15") == date(2023, 7, 15)
-        
+
         # Test with specific formats
         assert parse_date("15-07-2023", formats=["%d-%m-%Y"]) == date(2023, 7, 15)
-        
-        # Test invalid date
+
+        # Test invalid date and check for warning
         assert parse_date("invalid-date") is None
+        assert "Could not parse date string: invalid-date" in caplog.text
     
     def test_format_date(self):
         """Test formatting date objects."""

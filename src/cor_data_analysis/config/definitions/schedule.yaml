@@ -1,0 +1,25 @@
+# Defines the daily activity schedule.
+
+# Times are in HH:MM format (24-hour clock).
+activities:
+  - name: "Morning Work"
+    start_time: "08:00"
+    end_time: "09:00"
+  - name: "Reading"
+    start_time: "09:00"
+    end_time: "10:30"
+  - name: "Recess"
+    start_time: "10:30"
+    end_time: "11:00"
+  - name: "Math"
+    start_time: "11:00"
+    end_time: "12:00"
+  - name: "Lunch"
+    start_time: "12:00"
+    end_time: "13:00"
+  - name: "Science"
+    start_time: "13:00"
+    end_time: "14:30"
+  - name: "Dismissal"
+    start_time: "14:30"
+    end_time: "15:00"

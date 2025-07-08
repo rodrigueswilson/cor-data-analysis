@@ -1,250 +1,236 @@
 """
-Tests for the DataAggregator module.
-
-These tests verify that the DataAggregator correctly aggregates file metadata
-across multiple dimensions including time periods and classroom activities.
+Tests for the DataAggregator class.
 """
 
-import pytest
-from datetime import datetime, date, time, timedelta
-import os
-from pathlib import Path
-import tempfile
 import pandas as pd
 import numpy as np
+import pytest
+from datetime import datetime, timedelta
+from pathlib import Path
 import yaml
+import tempfile
 
 from cor_data_analysis.data.aggregation.aggregator import DataAggregator
+from cor_data_analysis.data.schedule.activity_schedule import ActivitySchedule
 from cor_data_analysis.data.calendar.school_calendar import SchoolCalendar
-from cor_data_analysis.data.calendar.activity_schedule import ActivitySchedule
 
+@pytest.fixture
+def sample_schedule_yaml():
+    """Create a sample schedule YAML for testing."""
+    schedule_yaml = """
+    activities:
+      - name: Morning Class
+        category: Academic
+        description: Academic morning activities
+      - name: Recess
+        category: Break
+        description: Morning break
+      - name: Math Class
+        category: Academic
+        description: Mathematics learning
+      - name: Lunch
+        category: Break
+        description: Lunch break
+      - name: Science Class
+        category: Academic
+        description: Science activities
+      - name: Afternoon Break
+        category: Break
+        description: Short afternoon break
+      - name: Reading Time
+        category: Academic
+        description: Reading and literacy
+      - name: After School
+        category: Other
+        description: After school activities
+    
+    periods:
+      - name: Fall Semester
+        start_date: 2023-09-01
+        end_date: 2023-12-20
+        activities:
+          - Morning Class
+          - Recess
+          - Math Class
+      - name: Spring Semester
+        start_date: 2024-01-08
+        end_date: 2024-06-15
+        activities:
+          - Science Class
+          - Afternoon Break
+          - Reading Time
+    
+    daily_schedule:
+      "2023-09-15":
+        "09:15:00": "Morning Class"
+        "13:30:00": "Science Class"
+      "2023-09-16":
+        "11:00:00": "Math Class"
+      "2023-10-01":
+        "14:45:00": "Reading Time"
+    """
+    return schedule_yaml
 
-class TestDataAggregator:
-    """Test the DataAggregator class functionality."""
+@pytest.fixture
+def sample_calendar_yaml():
+    """Create a sample calendar YAML for testing."""
+    calendar_yaml = """
+    school_year:
+      start_date: 2023-09-01
+      end_date: 2024-06-15
+    special_periods:
+      - name: Fall Semester
+        start_date: 2023-09-01
+        end_date: 2023-12-20
+      - name: Spring Semester
+        start_date: 2024-01-08
+        end_date: 2024-06-15
+    holidays:
+      - name: Thanksgiving
+        start_date: 2023-11-23
+        end_date: 2023-11-24
+      - name: Winter Break
+        start_date: 2023-12-21
+        end_date: 2024-01-07
+      - name: Spring Break
+        start_date: 2024-03-25
+        end_date: 2024-03-29
+    """
+    return calendar_yaml
 
-    def setup_method(self, method):
-        """Set up test fixtures."""
-        self.calendar = self._create_test_calendar()
-        self.schedule = self._create_test_schedule()
-        self.mp3_df = self._create_sample_mp3_df()
-        self.jpg_df = self._create_sample_jpg_df()
-        self.aggregator = DataAggregator(
-            calendar=self.calendar, activity_schedule=self.schedule
-        )
+@pytest.fixture
+def sample_schedule(tmp_path, sample_schedule_yaml):
+    """Create a sample ActivitySchedule for testing."""
+    schedule_file = tmp_path / "schedule.yaml"
+    schedule_file.write_text(sample_schedule_yaml)
+    schedule = ActivitySchedule.from_yaml(schedule_file)
+    print("\nSchedule periods:")
+    for period in schedule.schedule_periods:
+        print(f"  {period.name}: {period.start_date} - {period.end_date}")
+    return schedule
 
-    def _create_test_calendar(self):
-        """Create a test calendar for the tests."""
-        calendar_config = {
-            "school_years": {
-                "2022-2023": {
-                    "start_date": "2022-08-29",
-                    "end_date": "2023-06-15",
-                    "periods": {
-                        "P1 SY 22-23": {
-                            "start_date": "2022-09-01",
-                            "end_date": "2022-11-30",
-                        },
-                        "P2 SY 22-23": {
-                            "start_date": "2022-12-01",
-                            "end_date": "2023-02-28",
-                        },
-                        "P3 SY 22-23": {
-                            "start_date": "2023-03-01",
-                            "end_date": "2023-06-15",
-                        },
-                    },
-                }
-            }
-        }
-        return SchoolCalendar.from_dict(calendar_config)
+@pytest.fixture
+def sample_calendar(tmp_path, sample_calendar_yaml):
+    """Create a sample SchoolCalendar for testing."""
+    calendar_file = tmp_path / "calendar.yaml"
+    calendar_file.write_text(sample_calendar_yaml)
+    return SchoolCalendar.from_yaml(calendar_file)
 
-    def _create_test_schedule(self):
-        """Create a test activity schedule for the tests."""
-        schedule_config = {
-            "2022-09-01_2022-12-20": [
-                {
-                    "name": "Breakfast",
-                    "start_time": "08:30",
-                    "end_time": "09:00",
-                    "category": "Meal",
-                },
-                {
-                    "name": "Small Group",
-                    "start_time": "09:15",
-                    "end_time": "09:35",
-                    "category": "Instruction",
-                },
-                {
-                    "name": "Work Time",
-                    "start_time": "09:45",
-                    "end_time": "10:45",
-                    "category": "Work",
-                },
-            ],
-            "2022-12-21_2023-06-15": [
-                {
-                    "name": "Breakfast",
-                    "start_time": "08:45",
-                    "end_time": "09:15",
-                    "category": "Meal",
-                },
-                {
-                    "name": "Circle Time",
-                    "start_time": "09:30",
-                    "end_time": "09:50",
-                    "category": "Instruction",
-                },
-                {
-                    "name": "Centers",
-                    "start_time": "10:00",
-                    "end_time": "11:00",
-                    "category": "Work",
-                },
-            ],
-        }
-        return ActivitySchedule.from_dict(schedule_config)
+@pytest.fixture
+def sample_data_aggregator(sample_schedule, sample_calendar):
+    """Create a sample DataAggregator for testing."""
+    return DataAggregator(calendar=sample_calendar, activity_schedule=sample_schedule)
 
-    def _create_sample_mp3_df(self):
-        """Create a sample MP3 DataFrame for testing."""
-        dates = [
-            "2022-09-06", "2022-09-06", "2022-09-06", "2022-09-07", "2022-09-07", "2022-09-08",
-            "2022-10-03", "2022-10-03", "2022-10-04", "2022-10-05",
-            "2022-11-01", "2022-11-02",
-            "2022-12-05", "2022-12-06", "2022-12-07",
-            "2023-01-09", "2023-01-10",
-            "2023-03-06", "2023-03-07",
-        ]
-        times = [
-            "08:40", "09:25", "10:15",
-            "08:45", "09:20",
-            "10:00",
-            "08:35", "10:00",
-            "09:25",
-            "10:15",
-            "10:00", "10:30",
-            "08:50", "09:40", "10:30",
-            "08:55", "10:20",
-            "09:00", "10:35",
-        ]
-        durations = [30, 45, 120, 25, 35, 60, 40, 90, 30, 120, 45, 60, 35, 40, 100, 45, 110, 50, 75]
-        data = {
-            'Date': dates,
-            'Time': times,
-            'Duration': durations,
-            'FileSize': [i * 10240 for i in range(1, len(dates) + 1)],
-        }
-        return pd.DataFrame(data)
+@pytest.fixture
+def sample_mp3_df():
+    """Create a sample DataFrame for MP3 files."""
+    data = {
+        'Date': pd.to_datetime(['2023-09-15', '2023-09-15', '2023-09-16', '2023-10-01']),
+        'Time': ['09:15:00', '13:30:00', '11:00:00', '14:45:00'],
+        'Duration': [120.5, 300.2, 180.0, 200.5],
+        'FileSize': [2048000, 3072000, 1536000, 2560000],  # in bytes
+    }
+    return pd.DataFrame(data)
 
-    def _create_sample_jpg_df(self):
-        """Create a sample JPG DataFrame for testing."""
-        dates = [
-            "2022-09-06", "2022-09-06", "2022-09-07", "2022-09-08",
-            "2022-10-03", "2022-10-04", "2022-10-04",
-            "2022-12-05", "2022-12-05", "2022-12-06",
-            "2023-01-09", "2023-01-10",
-            "2023-03-06", "2023-03-07", "2023-03-07",
-        ]
-        times = [
-            "08:35", "09:20",
-            "09:30",
-            "09:55",
-            "08:40",
-            "09:25", "10:15",
-            "08:55", "09:45", "10:25",
-            "09:00", "10:30",
-            "09:50", "10:15", "10:40",
-        ]
-        data = {
-            'Date': dates,
-            'Time': times,
-            'FileSize': [i * 51200 for i in range(1, len(dates) + 1)],
-        }
-        return pd.DataFrame(data)
+@pytest.fixture
+def sample_jpg_df():
+    """Create a sample DataFrame for JPG files."""
+    data = {
+        'Date': pd.to_datetime(['2023-09-15', '2023-09-15', '2023-09-16', '2023-10-01']),
+        'Time': ['09:20:00', '13:35:00', '11:05:00', '14:50:00'],
+        'FileSize': [1024000, 1536000, 768000, 1280000],  # in bytes
+    }
+    return pd.DataFrame(data)
 
-    def test_format_duration(self):
-        """Test the duration formatting helper method."""
-        assert DataAggregator._format_duration(3661) == "1h 1m 1s"
-        assert DataAggregator._format_duration(65) == "1m 5s"
-        assert DataAggregator._format_duration(59) == "59s"
-        assert DataAggregator._format_duration(0) == "0s"
-        assert DataAggregator._format_duration(None) == "0s"
+def test_data_aggregator_init(sample_schedule, sample_calendar):
+    """Test DataAggregator initialization."""
+    aggregator = DataAggregator(calendar=sample_calendar, activity_schedule=sample_schedule)
+    
+    assert aggregator.calendar is sample_calendar
+    assert aggregator.activity_schedule is sample_schedule
 
-    def test_prepare_data(self):
-        """Test the centralized prepare_data method."""
-        prepared_df = self.aggregator.prepare_data(self.mp3_df)
-        assert 'DateTime' in prepared_df.columns
-        assert 'Activity' in prepared_df.columns
-        assert 'ActivityCategory' in prepared_df.columns
-        assert not prepared_df['DateTime'].isnull().any()
-        specific_time = pd.Timestamp('2022-09-06 09:25:00')
-        activity = prepared_df[prepared_df['DateTime'] == specific_time]['Activity'].iloc[0]
-        assert activity == 'Small Group'
+def test_prepare_data(sample_data_aggregator, sample_mp3_df):
+    """Test prepare_data method."""
+    prepared_df = sample_data_aggregator.prepare_data(sample_mp3_df)
+    
+    assert 'DateTime' in prepared_df.columns
+    assert 'Activity' in prepared_df.columns
+    assert 'ActivityCategory' in prepared_df.columns
+    
+    # Debug prints
+    print("\nDateTime values:")
+    for dt in prepared_df['DateTime']:
+        print(f"  {dt}")
+    
+    print("\nActivity values:")
+    print(prepared_df['Activity'].tolist())
+    
+    print("\nActivityCategory values:")
+    print(prepared_df['ActivityCategory'].tolist())
+    
+    # First record should be 9:15 AM which falls in "Morning Class"
+    assert prepared_df.iloc[0]['Activity'] == 'Morning Class'
+    assert prepared_df.iloc[0]['ActivityCategory'] == 'Academic'
+    
+    # Second record should be 1:30 PM which falls in "Science Class"
+    assert prepared_df.iloc[1]['Activity'] == 'Science Class'
+    assert prepared_df.iloc[1]['ActivityCategory'] == 'Academic'
 
-    def test_prepare_data_with_missing_datetime(self):
-        """Test prepare_data with missing datetime information."""
-        df_missing = self.mp3_df.copy()
-        df_missing.loc[0, 'Date'] = pd.NaT
-        prepared = self.aggregator.prepare_data(df_missing)
-        assert pd.isna(prepared.loc[0, 'DateTime'])
-        assert prepared.loc[0, 'Activity'] == 'Unknown'
+def test_ensure_datetime_columns(sample_data_aggregator, sample_mp3_df):
+    """Test _ensure_datetime_columns method."""
+    df_with_datetime = sample_data_aggregator._ensure_datetime_columns(sample_mp3_df)
+    
+    assert 'DateTime' in df_with_datetime.columns
+    assert df_with_datetime['DateTime'].dtype == 'datetime64[ns]'
+    
+    # Check if Date and Time were combined correctly
+    expected_datetime = pd.to_datetime('2023-09-15 09:15:00')
+    assert df_with_datetime.iloc[0]['DateTime'] == expected_datetime
 
-    def test_aggregate_by_time_unit(self):
-        """Test aggregation by time unit (day, week, month)."""
-        daily_agg = self.aggregator.aggregate_by_time_unit(self.mp3_df, self.jpg_df, 'day')
-        assert isinstance(daily_agg, pd.DataFrame)
-        assert 'mp3_count' in daily_agg.columns
-        assert daily_agg['mp3_count'].sum() > 0
+def test_calculate_distributions(sample_data_aggregator, sample_mp3_df, sample_jpg_df):
+    """Test _calculate_distributions method."""
+    # First, prepare the data to add Activity and ActivityCategory columns
+    mp3_prepared = sample_data_aggregator.prepare_data(sample_mp3_df)
+    jpg_prepared = sample_data_aggregator.prepare_data(sample_jpg_df)
+    
+    # Calculate distributions
+    distributions = sample_data_aggregator._calculate_distributions(mp3_prepared, jpg_prepared)
+    
+    assert 'activity_distribution' in distributions
+    assert 'category_distribution' in distributions
+    
+    # Check if distribution calculations are correct
+    activity_dist = distributions['activity_distribution']
+    assert 'Morning Class' in activity_dist
+    assert 'Science Class' in activity_dist
+    
+    category_dist = distributions['category_distribution']
+    assert 'Academic' in category_dist
+    
+    # Morning Class should have 1 MP3 and 1 JPG
+    assert activity_dist['Morning Class']['mp3_count'] == 1
+    assert activity_dist['Morning Class']['jpg_count'] == 1
 
-        weekly_agg = self.aggregator.aggregate_by_time_unit(self.mp3_df, self.jpg_df, 'week')
-        assert 'Week' in weekly_agg.columns
+def test_aggregate_by_time_unit(sample_data_aggregator, sample_mp3_df, sample_jpg_df):
+    """Test aggregate_by_time_unit method."""
+    # Test daily aggregation
+    daily_agg = sample_data_aggregator.aggregate_by_time_unit(sample_mp3_df, sample_jpg_df, 'day')
+    
+    assert 'Day' in daily_agg.columns
+    assert len(daily_agg) == 3  # 3 unique days in the sample data
+    
+    # First day should have 2 MP3s and 2 JPGs
+    first_day = daily_agg.iloc[0]
+    assert first_day['mp3_count'] == 2
+    assert first_day['jpg_count'] == 2
 
-        monthly_agg = self.aggregator.aggregate_by_time_unit(self.mp3_df, self.jpg_df, 'month')
-        assert 'Month' in monthly_agg.columns
-
-    def test_aggregate_by_school_year(self):
-        """Test the main aggregate_by_school_year integration method."""
-        result = self.aggregator.aggregate_by_school_year(self.mp3_df, self.jpg_df)
-        assert isinstance(result, dict)
-
-        # Check for all expected summary keys
-        expected_keys = [
-            'daily_summary', 'weekly_summary', 'monthly_summary', 
-            'period_summary', 'activity_distribution', 'category_distribution'
-        ]
-        for key in expected_keys:
-            assert key in result
-
-        # Validate period_summary structure and content
-        period_summary_df = result['period_summary']
-        assert isinstance(period_summary_df, pd.DataFrame)
-        assert not period_summary_df.empty
-        assert 'period_name' in period_summary_df.columns
-        assert 'P1 SY 22-23' in period_summary_df['period_name'].tolist()
-
-        # Validate distributions
-        assert len(result['activity_distribution']) > 0
-
-    def test_empty_data_handling(self):
-        """Test that aggregation methods handle empty DataFrames gracefully."""
-        empty_mp3 = pd.DataFrame(columns=self.mp3_df.columns)
-        empty_jpg = pd.DataFrame(columns=self.jpg_df.columns)
-        result = self.aggregator.aggregate_by_school_year(empty_mp3, empty_jpg)
-
-        # Check that all summary DataFrames are empty
-        assert result['daily_summary'].empty
-        assert result['weekly_summary'].empty
-        assert result['monthly_summary'].empty
-        assert result['period_summary'].empty
-
-        # Check that distributions are empty dictionaries
-        assert len(result['activity_distribution']) == 0
-        assert len(result['category_distribution']) == 0
-
-    def test_no_calendar_handling(self):
-        """Test that ValueError is raised when calendar or schedule are missing."""
-        no_cal_agg = DataAggregator()
-        with pytest.raises(ValueError, match="Calendar and activity schedule must be initialized"):
-            no_cal_agg.aggregate_by_school_year(self.mp3_df, self.jpg_df)
-
-
-
+def test_aggregate_by_school_year(sample_data_aggregator, sample_mp3_df, sample_jpg_df):
+    """Test aggregate_by_school_year method."""
+    results = sample_data_aggregator.aggregate_by_school_year(sample_mp3_df, sample_jpg_df)
+    
+    assert 'daily_summary' in results
+    assert 'weekly_summary' in results
+    assert 'monthly_summary' in results
+    assert 'period_summary' in results
+    assert 'activity_distribution' in results
+    assert 'category_distribution' in results

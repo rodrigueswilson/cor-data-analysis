@@ -1,0 +1,18 @@
+# Defines school year dates, holidays, and special periods.
+
+school_year:
+  start_date: "2023-09-01"
+  end_date: "2024-06-15"
+
+holidays:
+  - name: "Winter Break"
+    start_date: "2023-12-22"
+    end_date: "2024-01-05"
+  - name: "Spring Break"
+    start_date: "2024-04-01"
+    end_date: "2024-04-05"
+
+special_periods:
+  - name: "Final Exams"
+    start_date: "2024-06-10"
+    end_date: "2024-06-14"
